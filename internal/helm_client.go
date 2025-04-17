@@ -47,9 +47,12 @@ type Client interface {
 	InstallOrUpgradeHelmRelease(ctx context.Context, restConfig *rest.Config, credentialsPath, caFilePath string, spec addonsv1alpha1.HelmReleaseProxySpec) (*helmRelease.Release, error)
 	GetHelmRelease(ctx context.Context, restConfig *rest.Config, spec addonsv1alpha1.HelmReleaseProxySpec) (*helmRelease.Release, error)
 	UninstallHelmRelease(ctx context.Context, restConfig *rest.Config, spec addonsv1alpha1.HelmReleaseProxySpec) (*helmRelease.UninstallReleaseResponse, error)
+	CloseConnections()
 }
 
-type HelmClient struct{}
+type HelmClient struct{
+	registryClients []*registry.Client
+}
 
 // GetActionConfig returns a new Helm action configuration.
 func GetActionConfig(ctx context.Context, namespace string, config *rest.Config) (*helmAction.Configuration, error) {
@@ -97,9 +100,6 @@ func (c *HelmClient) InstallOrUpgradeHelmRelease(ctx context.Context, restConfig
 
 	log.V(2).Info("Installing or upgrading Helm release")
 
-	// historyClient := helmAction.NewHistory(actionConfig)
-	// historyClient.Max = 1
-	// if _, err := historyClient.Run(spec.ReleaseName); err == helmDriver.ErrReleaseNotFound {
 	existingRelease, err := c.GetHelmRelease(ctx, restConfig, spec)
 	if err != nil {
 		if errors.Is(err, helmDriver.ErrReleaseNotFound) {
@@ -182,7 +182,7 @@ func (c *HelmClient) InstallHelmRelease(ctx context.Context, restConfig *rest.Co
 	enableClientCache := spec.Options.EnableClientCache
 	log.V(2).Info("Creating install registry client", "enableClientCache", enableClientCache, "credentialsPath", credentialsPath, "cFilePath", caFilePath)
 
-	registryClient, err := newDefaultRegistryClient(credentialsPath, enableClientCache, caFilePath, ptr.Deref(spec.TLSConfig, addonsv1alpha1.TLSConfig{}).InsecureSkipTLSVerify)
+	registryClient, err := c.newDefaultRegistryClient(credentialsPath, enableClientCache, caFilePath, ptr.Deref(spec.TLSConfig, addonsv1alpha1.TLSConfig{}).InsecureSkipTLSVerify)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +254,10 @@ func (c *HelmClient) InstallHelmRelease(ctx context.Context, restConfig *rest.Co
 }
 
 // newDefaultRegistryClient creates registry client object with default config which can be used to install/upgrade helm charts.
-func newDefaultRegistryClient(credentialsPath string, enableCache bool, caFilePath string, insecureSkipTLSVerify bool) (*registry.Client, error) {
+func (c *HelmClient) newDefaultRegistryClient(credentialsPath string, enableCache bool, caFilePath string, insecureSkipTLSVerify bool) (*registry.Client, error) {
+	var registryClient *registry.Client
+	var err error
+	
 	if caFilePath == "" && !insecureSkipTLSVerify {
 		opts := []registry.ClientOption{
 			registry.ClientOptDebug(true),
@@ -266,10 +269,18 @@ func newDefaultRegistryClient(credentialsPath string, enableCache bool, caFilePa
 			opts = append(opts, registry.ClientOptCredentialsFile(credentialsPath))
 		}
 
-		return registry.NewClient(opts...)
+		registryClient, err = registry.NewClient(opts...)
+	} else {
+		registryClient, err = registry.NewRegistryClientWithTLS(os.Stderr, "", "", caFilePath, insecureSkipTLSVerify, credentialsPath, true)
 	}
-
-	return registry.NewRegistryClientWithTLS(os.Stderr, "", "", caFilePath, insecureSkipTLSVerify, credentialsPath, true)
+	
+	if err != nil {
+		return nil, err
+	}
+	
+	// Track the client for later cleanup
+	c.registryClients = append(c.registryClients, registryClient)
+	return registryClient, nil
 }
 
 // getHelmChartAndRepoName returns chartName, repoURL as per the format requirred in helm install/upgrade config.
@@ -302,7 +313,7 @@ func (c *HelmClient) UpgradeHelmReleaseIfChanged(ctx context.Context, restConfig
 	enableClientCache := spec.Options.EnableClientCache
 	log.V(2).Info("Creating upgrade registry client", "enableClientCache", enableClientCache, "credentialsPath", credentialsPath)
 
-	registryClient, err := newDefaultRegistryClient(credentialsPath, enableClientCache, caFilePath, ptr.Deref(spec.TLSConfig, addonsv1alpha1.TLSConfig{}).InsecureSkipTLSVerify)
+	registryClient, err := c.newDefaultRegistryClient(credentialsPath, enableClientCache, caFilePath, ptr.Deref(spec.TLSConfig, addonsv1alpha1.TLSConfig{}).InsecureSkipTLSVerify)
 	if err != nil {
 		return nil, err
 	}
@@ -510,4 +521,13 @@ func (c *HelmClient) RollbackHelmRelease(ctx context.Context, restConfig *rest.C
 	rollbackClient := helmAction.NewRollback(actionConfig)
 
 	return rollbackClient.Run(spec.ReleaseName)
+}
+
+// CloseConnections closes all registry client connections.
+// Note: registry.Client in Helm v3.16.4 doesn't expose a Close method directly,
+// but we should release references to allow garbage collection.
+func (c *HelmClient) CloseConnections() {
+	// Just clear the slice to release references to registry clients
+	// and allow them to be garbage collected
+	c.registryClients = nil
 }

@@ -101,3 +101,15 @@ func (mr *MockClientMockRecorder) UninstallHelmRelease(ctx, restConfig, spec any
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UninstallHelmRelease", reflect.TypeOf((*MockClient)(nil).UninstallHelmRelease), ctx, restConfig, spec)
 }
+
+// CloseConnections mocks base method.
+func (m *MockClient) CloseConnections() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "CloseConnections")
+}
+
+// CloseConnections indicates an expected call of CloseConnections.
+func (mr *MockClientMockRecorder) CloseConnections() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CloseConnections", reflect.TypeOf((*MockClient)(nil).CloseConnections))
+}

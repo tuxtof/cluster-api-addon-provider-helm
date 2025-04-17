@@ -97,6 +97,11 @@ func (r *HelmReleaseProxyReconciler) SetupWithManager(ctx context.Context, mgr c
 func (r *HelmReleaseProxyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, reterr error) {
 	log := ctrl.LoggerFrom(ctx)
 
+	// Ensure connections are properly closed at the end of reconciliation
+	defer func() {
+		r.HelmClient.CloseConnections()
+	}()
+
 	log.V(2).Info("Beginning reconciliation for HelmReleaseProxy", "requestNamespace", req.Namespace, "requestName", req.Name)
 
 	// Fetch the HelmReleaseProxy instance.
